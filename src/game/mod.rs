@@ -495,7 +495,11 @@ impl Game {
                 ty: s.ty as usize,
                 x: x as i32,
                 y: y as i32,
-                hp: data::TYPES[s.ty as usize].hp.max(1),
+                hp: if s.hp > 0 {
+                    s.hp
+                } else {
+                    data::TYPES[s.ty as usize].hp.max(1)
+                },
                 step: 0,
                 vx: (avg.round() as i32).min(-1),
                 hit_by: vec![],
@@ -545,9 +549,20 @@ impl Game {
         self.step_ship(input);
         self.step_enemies();
         self.step_bosses();
+        // Bullets stop where they meet solid scenery (every pixel they sweep through).
+        let solid = if SOLID_SCENERY[self.level] {
+            art().strips[self.level].as_ref()
+        } else {
+            None
+        };
         for s in &mut self.bullets {
+            let x0 = s.x;
             s.x += s.vx;
             s.dead |= s.x < -2 || s.x > W;
+            if let Some(strip) = solid {
+                let (lo, hi) = (x0.min(s.x), x0.max(s.x) + 1);
+                s.dead |= (lo..=hi).any(|x| (0..W).contains(&x) && strip.get(self.scroll + x, s.y));
+            }
         }
         self.step_specials();
         for it in &mut self.items {
@@ -1154,6 +1169,63 @@ mod tests {
         }
         assert!(clouds_seen > 0, "no floating clouds passed by");
         assert_eq!(g.lives, START_LIVES);
+    }
+
+    #[test]
+    fn bullets_stop_at_terrain() {
+        let mut g = Game::new(1, 0);
+        g.start_at(3);
+        g.debug_invulnerable();
+        let strip = art().strips[2].as_ref().unwrap();
+        // A terrain pixel in the right half of the screen, with open space to its left.
+        let (tx, ty) = (40..W)
+            .flat_map(|x| (0..PF_H).map(move |y| (x, y)))
+            .find(|&(x, y)| {
+                strip.get(g.scroll + x, y) && !(20..x).any(|c| strip.get(g.scroll + c, y))
+            })
+            .expect("no terrain on screen");
+        g.enemies.clear();
+        g.bullets.clear();
+        g.bullets.push(Bullet {
+            x: 20,
+            y: ty,
+            vx: 2,
+            enemy: false,
+            dead: false,
+        });
+        let mut scroll0 = g.scroll;
+        for _ in 0..40 {
+            g.tick(Input::default());
+            g.enemies.clear();
+            g.bullets.retain(|b| !b.enemy);
+            if g.bullets.is_empty() {
+                break;
+            }
+            let b = &g.bullets[0];
+            assert!(
+                b.x + (g.scroll - scroll0) <= tx + 1,
+                "bullet passed through terrain"
+            );
+            scroll0 = scroll0.min(g.scroll);
+        }
+        assert!(g.bullets.is_empty(), "bullet never stopped");
+    }
+
+    #[test]
+    fn level3_miniboss_holds_the_stage() {
+        // The jellyfish mini-boss soaks up hits instead of dying like a grunt.
+        let s = LEVELS[2]
+            .spawns
+            .iter()
+            .find(|s| s.hp > 0)
+            .expect("no mini-boss on level 3");
+        assert!(s.hp >= 20);
+        // Bosses glide in from the right edge.
+        for l in &LEVELS {
+            for b in l.bosses {
+                assert!(b.path[0].1 >= 80, "boss pops in at x {}", b.path[0].1);
+            }
+        }
     }
 
     #[test]
