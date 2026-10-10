@@ -256,7 +256,7 @@ fn App() -> impl IntoView {
 
             <section class="phone">
                 <div class="bezel">
-                    <div class="screen" class:grid=move || { scale.get() >= 4 } style=screen_style>
+                    <div class="screen" style=screen_style>
                         <screen::Lcd ui=ui />
                         <Show when=move || matches!(ui.phase.get(), Phase::Title | Phase::GameOver)>
                             <button class="screen-btn" on:click=move |_| start_game()>

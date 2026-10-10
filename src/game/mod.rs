@@ -485,7 +485,11 @@ impl Game {
 
         while self.spawn_i < def.spawns.len() && def.spawns[self.spawn_i].tick as u32 <= self.lt {
             let s = &def.spawns[self.spawn_i];
-            let (_, x, y) = s.path[0];
+            let (t0, x, y) = s.path[0];
+            // Speed to keep once the recording runs out: the path's average,
+            // always leftward so nothing hangs on screen or drifts back.
+            let (t1, x1, _) = s.path[s.path.len() - 1];
+            let avg = (x1 as f32 - x as f32) / (t1 as f32 - t0 as f32).max(1.0);
             self.enemies.push(Enemy {
                 spawn: self.spawn_i,
                 ty: s.ty as usize,
@@ -493,7 +497,7 @@ impl Game {
                 y: y as i32,
                 hp: data::TYPES[s.ty as usize].hp.max(1),
                 step: 0,
-                vx: -1,
+                vx: (avg.round() as i32).min(-1),
                 hit_by: vec![],
                 dead: false,
             });
@@ -668,12 +672,8 @@ impl Game {
                 let f = (lt - t0 as i32) as f32 / span as f32;
                 e.x = (x0 as f32 + (x1 as i32 - x0 as i32) as f32 * f).round() as i32;
                 e.y = (y0 as f32 + (y1 as i32 - y0 as i32) as f32 * f).round() as i32;
-                let v = ((x1 as i32 - x0 as i32) as f32 / span as f32).round() as i32;
-                if v != 0 {
-                    e.vx = v;
-                }
             } else if lt > t0 as i32 {
-                // Beyond the footage: keep the last measured speed.
+                // Beyond the footage: carry on at the path's average speed.
                 e.x += e.vx;
             }
             let w = art().types[e.ty].first().map_or(8, |s| s.w);
@@ -1154,6 +1154,34 @@ mod tests {
         }
         assert!(clouds_seen > 0, "no floating clouds passed by");
         assert_eq!(g.lives, START_LIVES);
+    }
+
+    #[test]
+    fn enemies_never_move_backwards() {
+        for lvl in 1..=6 {
+            let mut g = Game::new(5, 0);
+            g.start_at(lvl);
+            let mut last: std::collections::HashMap<usize, i32> = Default::default();
+            for _ in 0..3000 {
+                g.debug_invulnerable();
+                g.tick(Input::default());
+                if g.phase != Phase::Play {
+                    break;
+                }
+                for e in &g.enemies {
+                    if let Some(&px) = last.get(&e.spawn) {
+                        assert!(
+                            e.x <= px,
+                            "level {lvl}: enemy {} moved right {} -> {}",
+                            e.spawn,
+                            px,
+                            e.x
+                        );
+                    }
+                    last.insert(e.spawn, e.x);
+                }
+            }
+        }
     }
 
     #[test]

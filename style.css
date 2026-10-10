@@ -94,18 +94,6 @@ body {
   image-rendering: crisp-edges;
 }
 
-/* Thin gaps between LCD cells. */
-.screen.grid::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image: linear-gradient(to right, var(--lcd-bg) 1px, transparent 1px),
-    linear-gradient(to bottom, var(--lcd-bg) 1px, transparent 1px);
-  background-size: var(--cell) var(--cell);
-  opacity: 0.5;
-}
-
 .screen-btn {
   position: absolute;
   left: 50%;
