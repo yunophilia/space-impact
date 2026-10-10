@@ -64,6 +64,7 @@ pub enum Weapon {
 pub enum Sfx {
     Shoot,
     Special,
+    SpecialWall,
     Hit,
     Explode,
     PowerUp,
@@ -455,6 +456,7 @@ impl Game {
                 };
                 if shot_at(seq, self.phase_ms, false).1 || (select && self.phase_ms > 600) {
                     self.set_phase(Phase::GameOver);
+                    self.sfx.push(Sfx::GameOver);
                 }
             }
             Phase::GameOver => {
@@ -642,7 +644,11 @@ impl Game {
                 y,
                 dead: false,
             });
-            self.sfx.push(Sfx::Special);
+            self.sfx.push(if self.weapon == Weapon::Wall {
+                Sfx::SpecialWall
+            } else {
+                Sfx::Special
+            });
         }
     }
 
@@ -736,7 +742,13 @@ impl Game {
     }
 
     fn step_specials(&mut self) {
-        let targets: Vec<(i32, i32)> = self.enemies.iter().map(|e| (e.x, e.y)).collect();
+        let spawns = self.level_def().spawns;
+        let targets: Vec<(i32, i32)> = self
+            .enemies
+            .iter()
+            .filter(|e| !spawns[e.spawn].decor)
+            .map(|e| (e.x, e.y))
+            .collect();
         for sp in &mut self.specials {
             match &mut sp.kind {
                 SpecialKind::Laser { ttl } => {
@@ -805,7 +817,8 @@ impl Game {
 
         for e in &mut self.enemies {
             let fr = &a.types[e.ty];
-            if fr.is_empty() {
+            // Background decorations (level 2's clouds) never collide with anything.
+            if fr.is_empty() || spawns[e.spawn].decor {
                 continue;
             }
             let body = Body {
@@ -1126,15 +1139,20 @@ mod tests {
         g.shield = 0;
         // Park the ship on the bottom row, inside the cloud strip.
         g.ship_y = PF_H - SHIP_H - 1;
-        for _ in 0..200 {
+        // Drop real enemies and their shots, but keep the floating clouds.
+        let spawns = LEVELS[1].spawns;
+        let mut clouds_seen = 0;
+        for _ in 0..600 {
             g.tick(Input {
                 down: true,
                 ..Default::default()
             });
             g.shield = 0;
-            g.enemies.clear();
+            g.enemies.retain(|e| spawns[e.spawn].decor);
+            clouds_seen += g.enemies.len();
             g.bullets.clear();
         }
+        assert!(clouds_seen > 0, "no floating clouds passed by");
         assert_eq!(g.lives, START_LIVES);
     }
 
