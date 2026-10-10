@@ -278,7 +278,8 @@ button:focus-visible {
   margin-bottom: 52px;
 }
 
-.pad-btn:active {
+.pad-btn:active,
+.pad-btn.on {
   transform: translateY(3px);
   box-shadow: 0 1px 0 #8fb39d;
 }

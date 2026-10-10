@@ -21,6 +21,7 @@ console_error_panic_hook = "0.1"
 [dependencies.web-sys]
 version = "0.3"
 features = [
+  "AddEventListenerOptions",
   "AudioContext",
   "AudioContextState",
   "AudioDestinationNode",
@@ -45,6 +46,9 @@ features = [
   "PeriodicWave",
   "PointerEvent",
   "Storage",
+  "Touch",
+  "TouchEvent",
+  "TouchList",
   "Window",
 ]
 

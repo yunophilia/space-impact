@@ -237,74 +237,213 @@ fn set_pad(f: impl FnOnce(&mut Input)) {
     PAD.set(p);
 }
 
-/// D-pad plus fire/special buttons, multi-touch friendly via pointer events.
+#[derive(Clone, Copy, PartialEq)]
+enum Role {
+    Dpad,
+    Fire,
+    Special,
+}
+
+thread_local! {
+    /// Which control each finger on the pad started on, by touch identifier.
+    static FINGERS: RefCell<Vec<(i32, Role)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Centre and half-size of an element on screen.
+type Zone = (f64, f64, f64, f64);
+
+fn zone(el: &web_sys::Element) -> Zone {
+    let r = el.get_bounding_client_rect();
+    (
+        r.left() + r.width() / 2.0,
+        r.top() + r.height() / 2.0,
+        r.width() / 2.0,
+        r.height() / 2.0,
+    )
+}
+
+/// Adds the d-pad direction for a point to `p`.
+fn steer(p: &mut Input, (cx, cy, rx, ry): Zone, x: f64, y: f64) {
+    const DEAD: f64 = 0.3;
+    let (dx, dy) = ((x - cx) / rx, (y - cy) / ry);
+    p.left |= dx < -DEAD;
+    p.right |= dx > DEAD;
+    p.up |= dy < -DEAD;
+    p.down |= dy > DEAD;
+}
+
+fn clear_dirs(p: &mut Input) {
+    (p.left, p.right, p.up, p.down) = (false, false, false, false);
+}
+
+/// D-pad plus fire/special buttons.
+///
+/// Touch input is rebuilt from scratch on every touch event out of the list of
+/// fingers currently on the screen, so a cancelled or missed event can never
+/// leave a button released while a finger still holds it. Each finger keeps
+/// the control it first landed on, however far it drifts. Pointer events still
+/// drive the pad for a mouse.
 #[component]
 pub fn TouchPad() -> impl IntoView {
+    let pad = NodeRef::<html::Div>::new();
     let dpad = NodeRef::<html::Div>::new();
-    let steer = move |e: &web_sys::PointerEvent| {
-        let Some(el) = dpad.get_untracked() else {
+    let fire = NodeRef::<html::Button>::new();
+    let special = NodeRef::<html::Button>::new();
+    let (fire_on, set_fire_on) = signal(false);
+    let (special_on, set_special_on) = signal(false);
+
+    let on_touch = move |e: web_sys::TouchEvent| {
+        e.prevent_default();
+        let (Some(pd), Some(d), Some(f), Some(s)) = (
+            pad.get_untracked(),
+            dpad.get_untracked(),
+            fire.get_untracked(),
+            special.get_untracked(),
+        ) else {
             return;
         };
-        let r = el.get_bounding_client_rect();
-        let dx = (e.client_x() as f64 - (r.left() + r.width() / 2.0)) / (r.width() / 2.0);
-        let dy = (e.client_y() as f64 - (r.top() + r.height() / 2.0)) / (r.height() / 2.0);
-        const DEAD: f64 = 0.3;
-        set_pad(|p| {
-            p.left = dx < -DEAD;
-            p.right = dx > DEAD;
-            p.up = dy < -DEAD;
-            p.down = dy > DEAD;
+        if e.type_() == "touchstart" {
+            audio::unlock();
+        }
+        let (dz, fz, sz) = (zone(&d), zone(&f), zone(&s));
+        let touches = e.touches();
+        let mut p = Input::default();
+        FINGERS.with(|fingers| {
+            let mut fingers = fingers.borrow_mut();
+            let mut seen = vec![];
+            for i in 0..touches.length() {
+                let Some(t) = touches.get(i) else { continue };
+                let (x, y) = (t.client_x() as f64, t.client_y() as f64);
+                let role = match fingers.iter().find(|(id, _)| *id == t.identifier()) {
+                    Some(&(_, r)) => r,
+                    None => {
+                        // Fingers elsewhere on the page are not ours.
+                        let on_pad = t
+                            .target()
+                            .and_then(|tg| tg.dyn_into::<web_sys::Node>().ok())
+                            .is_some_and(|n| pd.contains(Some(&n)));
+                        if !on_pad {
+                            continue;
+                        }
+                        // A new finger takes the control whose centre is nearest.
+                        let dist = |(cx, cy, rx, ry): Zone| ((x - cx) / rx).hypot((y - cy) / ry);
+                        let r = [
+                            (Role::Dpad, dist(dz)),
+                            (Role::Fire, dist(fz)),
+                            (Role::Special, dist(sz)),
+                        ]
+                        .into_iter()
+                        .min_by(|a, b| a.1.total_cmp(&b.1))
+                        .map_or(Role::Dpad, |(r, _)| r);
+                        fingers.push((t.identifier(), r));
+                        r
+                    }
+                };
+                seen.push(t.identifier());
+                match role {
+                    Role::Dpad => steer(&mut p, dz, x, y),
+                    Role::Fire => p.fire = true,
+                    Role::Special => p.special = true,
+                }
+            }
+            fingers.retain(|(id, _)| seen.contains(id));
         });
+        PAD.set(p);
+        set_fire_on.set(p.fire);
+        set_special_on.set(p.special);
     };
-    let release = move |_| {
-        set_pad(|p| {
-            p.left = false;
-            p.right = false;
-            p.up = false;
-            p.down = false;
-        })
+    pad.on_load(move |el| {
+        let opts = web_sys::AddEventListenerOptions::new();
+        opts.set_passive(false);
+        let cb = Closure::<dyn FnMut(web_sys::TouchEvent)>::new(on_touch);
+        for ev in ["touchstart", "touchmove", "touchend", "touchcancel"] {
+            let _ = el.add_event_listener_with_callback_and_add_event_listener_options(
+                ev,
+                cb.as_ref().unchecked_ref(),
+                &opts,
+            );
+        }
+        // Lives as long as the element; the pad is only created when it is switched on.
+        cb.forget();
+    });
+
+    // The pointer handlers below are for a mouse; touch is handled above.
+    let mouse = |e: &web_sys::PointerEvent| e.pointer_type() != "touch";
+    let mouse_steer = move |e: &web_sys::PointerEvent| {
+        if let Some(el) = dpad.get_untracked() {
+            let z = zone(&el);
+            set_pad(|p| {
+                clear_dirs(p);
+                steer(p, z, e.client_x() as f64, e.client_y() as f64);
+            });
+        }
     };
-    let button = move |label: &'static str, class: &'static str, set: fn(&mut Input, bool)| {
+    let release = move |e: web_sys::PointerEvent| {
+        if mouse(&e) {
+            set_pad(clear_dirs);
+        }
+    };
+    let button = move |label: &'static str,
+                       class: &'static str,
+                       node: NodeRef<html::Button>,
+                       on: ReadSignal<bool>,
+                       set: fn(&mut Input, bool)| {
         view! {
             <button
                 class=format!("pad-btn {class}")
+                class:on=on
+                node_ref=node
                 on:pointerdown=move |e: web_sys::PointerEvent| {
+                    if !mouse(&e) {
+                        return;
+                    }
                     e.prevent_default();
                     audio::unlock();
-                    // Capture the pointer so a held finger that drifts off the
-                    // button keeps firing; only lifting it releases the button.
                     if let Some(el) = e.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) {
                         let _ = el.set_pointer_capture(e.pointer_id());
                     }
                     set_pad(|p| set(p, true));
                 }
-                on:pointerup=move |_| set_pad(|p| set(p, false))
-                on:pointercancel=move |_| set_pad(|p| set(p, false))
-                on:lostpointercapture=move |_| set_pad(|p| set(p, false))
+                on:pointerup=move |e: web_sys::PointerEvent| {
+                    if mouse(&e) {
+                        set_pad(|p| set(p, false))
+                    }
+                }
+                on:pointercancel=move |e: web_sys::PointerEvent| {
+                    if mouse(&e) {
+                        set_pad(|p| set(p, false))
+                    }
+                }
                 on:contextmenu=move |e| e.prevent_default()
             >
                 {label}
             </button>
         }
     };
-    on_cleanup(|| PAD.set(Input::default()));
+    on_cleanup(|| {
+        PAD.set(Input::default());
+        FINGERS.with(|f| f.borrow_mut().clear());
+    });
 
     view! {
-        <div class="touchpad">
+        <div class="touchpad" node_ref=pad>
             <div
                 class="dpad"
                 node_ref=dpad
                 on:pointerdown=move |e: web_sys::PointerEvent| {
+                    if !mouse(&e) {
+                        return;
+                    }
                     e.prevent_default();
                     audio::unlock();
                     if let Some(el) = dpad.get_untracked() {
                         let _ = el.set_pointer_capture(e.pointer_id());
                     }
-                    steer(&e);
+                    mouse_steer(&e);
                 }
                 on:pointermove=move |e: web_sys::PointerEvent| {
-                    if e.buttons() != 0 || e.pointer_type() == "touch" {
-                        steer(&e);
+                    if mouse(&e) && e.buttons() != 0 {
+                        mouse_steer(&e);
                     }
                 }
                 on:pointerup=release
@@ -317,8 +456,8 @@ pub fn TouchPad() -> impl IntoView {
                 <span class="arrow right"></span>
             </div>
             <div class="actions">
-                {button("Special", "special", |p, v| p.special = v)}
-                {button("Fire", "fire", |p, v| p.fire = v)}
+                {button("Special", "special", special, special_on, |p, v| p.special = v)}
+                {button("Fire", "fire", fire, fire_on, |p, v| p.fire = v)}
             </div>
         </div>
     }
