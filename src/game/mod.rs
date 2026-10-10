@@ -5,6 +5,7 @@
 //! there; where the footage ends (the enemy was shot down) they carry on at
 //! their last speed. One tick is one game frame, about 11 per second.
 
+#[rustfmt::skip]
 pub mod data;
 pub mod gfx;
 
@@ -27,6 +28,8 @@ const EXIT_HOLD: u32 = 15;
 const EXIT_STEPS: [i32; 9] = [3, 3, 4, 5, 6, 7, 8, 10, 12];
 const LASER_TICKS: u32 = 4;
 const FINAL_BOSS_HP: u16 = 150;
+/// Level 2's clouds are background: the ship flies through them.
+const SOLID_SCENERY: [bool; 6] = [true, false, true, true, true, true];
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct Input {
@@ -909,7 +912,7 @@ impl Game {
             }
         }
 
-        if vulnerable {
+        if vulnerable && SOLID_SCENERY[self.level] {
             if let Some(strip) = a.strips[self.level].as_ref() {
                 let crash = (0..SHIP_H).any(|y| {
                     (0..SHIP_W).any(|x| {
@@ -974,7 +977,11 @@ impl Game {
         let a = art();
         f.clear();
         match self.phase {
-            Phase::Title => f.paste(shot_at(Seq::Intro, self.phase_ms.min(1 << 30), false).0, 0, 0),
+            Phase::Title => f.paste(
+                shot_at(Seq::Intro, self.phase_ms.min(1 << 30), false).0,
+                0,
+                0,
+            ),
             Phase::Victory => f.paste(shot_at(Seq::Victory, self.phase_ms, false).0, 0, 0),
             Phase::Defeat => f.paste(shot_at(Seq::Defeat, self.phase_ms, false).0, 0, 0),
             Phase::GameOver => {
@@ -1113,15 +1120,40 @@ mod tests {
     }
 
     #[test]
+    fn clouds_are_not_solid() {
+        let mut g = Game::new(1, 0);
+        g.start_at(2);
+        g.shield = 0;
+        // Park the ship on the bottom row, inside the cloud strip.
+        g.ship_y = PF_H - SHIP_H - 1;
+        for _ in 0..200 {
+            g.tick(Input {
+                down: true,
+                ..Default::default()
+            });
+            g.shield = 0;
+            g.enemies.clear();
+            g.bullets.clear();
+        }
+        assert_eq!(g.lives, START_LIVES);
+    }
+
+    #[test]
     fn title_flow() {
         let mut g = Game::new(1, 0);
         assert_eq!(g.phase, Phase::Title);
-        g.tick(Input { select: true, ..Default::default() });
+        g.tick(Input {
+            select: true,
+            ..Default::default()
+        });
         assert_eq!(g.phase, Phase::Play);
         g.quit();
         assert_eq!(g.phase, Phase::Title);
         g.tick(Input::default());
-        g.tick(Input { fire: true, ..Default::default() });
+        g.tick(Input {
+            fire: true,
+            ..Default::default()
+        });
         assert_eq!(g.phase, Phase::Play);
     }
 }
