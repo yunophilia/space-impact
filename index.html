@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="description" content="Nokia's Space Impact rebuilt in Rust, Leptos and WebAssembly, drawn on a real 84x48 1-bit LCD." />
+    <meta name="theme-color" content="#1b1f24" />
+    <title>Space Impact</title>
+    <meta name="build" content="__BUILD__" />
+    <script>
+      // GitHub Pages lets browsers cache this page for a while. If a newer deploy
+      // exists, reload once onto a fresh URL so the new game files are fetched.
+      (function () {
+        var build = document.querySelector('meta[name="build"]').content;
+        if (build.indexOf("__") === 0) return; // local dev build
+        fetch("version.txt", { cache: "no-store" })
+          .then(function (r) { return r.ok ? r.text() : build; })
+          .then(function (latest) {
+            latest = latest.trim();
+            if (latest && latest !== build) {
+              var url = new URL(location.href);
+              if (url.searchParams.get("v") === latest) return; // already tried
+              url.searchParams.set("v", latest);
+              location.replace(url.toString());
+            }
+          })
+          .catch(function () {});
+      })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&display=swap" rel="stylesheet" />
+    <link data-trunk rel="icon" href="favicon.svg" />
+    <link data-trunk rel="css" href="style.css" />
+    <link data-trunk rel="rust" data-bin="space-impact" data-wasm-opt="z" />
+  </head>
+  <body></body>
+</html>
